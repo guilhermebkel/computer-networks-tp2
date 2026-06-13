@@ -51,7 +51,7 @@ print(" my name is ", end='', flush=True)
 my_name_msg = b''
 my_name_msg = control.recv(32);
 l = unpack("!32s",my_name_msg)
-my_name = l[0].decode()
+my_name = l[0].decode().rstrip('\x00') # removemos o padding de nulos para que comparações simples funcionem corretamente
 print(my_name,flush=True)
 
 
@@ -61,6 +61,7 @@ print(my_name,flush=True)
 # novas que surjam de outros roteadores, bem como enviar periodicamente
 # as mensagens do protocolo de roteamento para os seus vizinhos imediados
 ####################################################################
+
 import os
 import select
 import threading
@@ -69,11 +70,16 @@ lock = threading.Lock()
 sockets_list = []
 routing_table = {}
 peer_router_name_to_peer_socket = {}
+timer = None
 
 INFINITY = 16 # valor do custo infinito conforme o RIP
 ROUTE_MESSAGE_TYPE = ord('R')  # mensagem de anúncio de vetor de distâncias
 FORWARD_MESSAGE_TYPE = ord('F') # mensagem de encaminhamento de mensagem de dados
 ANNOUNCE_INTERVAL = float(os.environ.get('RC_RIP_INTERVAL', '1.0')) # intervalo entre anúncios DV, alterável via variável de ambiente
+
+# o roteador sempre se conhece com distancia zero
+routing_table[my_name] = (my_name, 0)
+sockets_list = [server_socket, control]
 
 def recv_exactly(sock, expected_bytes):
     received = b''
@@ -137,9 +143,9 @@ while(True):  # aguarda mensagens do comando de controle
     except (ValueError, OSError):
         break
 
-    for socket in list(readable):
+    for socket_item in list(readable):
         # novas conexões de roteadores vizinhos
-        if socket is server_socket:
+        if socket_item is server_socket:
             connection, _ = server_socket.accept()
             peer_router_name_in_bytes = recv_exactly(connection, 32)
 
@@ -162,7 +168,7 @@ while(True):  # aguarda mensagens do comando de controle
                     sockets_list.append(connection)
 
         # mensagens do programa de controle
-        elif socket is control:
+        elif socket_item is control:
             msg = control.recv(1)   # no roteador, não haverá apenas essa conexão
             if not msg or msg=='':
                 print("Connection closed",flush=True)
@@ -206,8 +212,7 @@ while(True):  # aguarda mensagens do comando de controle
                 # o roteador recebe o NOME do outro roteador que deve ser removido
                 # da sua lista de conexões
                 msg=control.recv(32)
-                roteador = extrai_roteador(msg)
-                print(comando, roteador, flush=True)
+                roteador = extrai_roteador(msg).rstrip('\x00')
                 # OBS: o OUTRO roteador também deve remover a conexão de sua lista
                 # há mais de uma forma de fazer isso, vocês devem determinar a sua
 
@@ -227,12 +232,11 @@ while(True):  # aguarda mensagens do comando de controle
                 # o roteador recebe o NOME do outro destino e o texto
                 msg=control.recv(96)
                 destino, texto = extrai_destino_texto(msg)
-                print("%s %s '%s'" % (comando, destino, texto) ,flush=True)
                 # a entrada com o destino na tabela de rotas identifica o próximo passo
                 # a mensagem enviada deve ser repassada para um vizinho, se necessário
 
                 destino = destino.rstrip('\x00')
-                texto   = texto.rstrip('\x00')
+                texto = texto.rstrip('\x00')
 
                 # a mensagem chegou ao destino final
                 if destino == my_name:
@@ -256,7 +260,6 @@ while(True):  # aguarda mensagens do comando de controle
                                 pass
 
             elif comando=='T' or comando=='I':
-                print(comando,flush=True)
                 # cada comando vai exigir um tipo de reação do roteador que a recebe,
                 # sua implementação deve decidir como tratar cada uma
 
@@ -281,5 +284,5 @@ while(True):  # aguarda mensagens do comando de controle
 
         # mensagens de roteadores vizinhos
         else:
-            print("falta implementar")
+            type_in_bytes = recv_exactly(socket, 1)
         
