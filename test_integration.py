@@ -80,6 +80,7 @@ class RouterProcess:
 
     def kill(self):
         self.proc.kill()
+        self.proc.stdout.close()
         self.proc.wait()
 
 
@@ -444,7 +445,9 @@ class TestComControlePy(unittest.TestCase):
     def tearDown(self):
         for p in self._procs:
             try:
-                p.kill(); p.wait()
+                p.kill()
+                p.stdout.close()
+                p.wait()
             except Exception:
                 pass
         for f in self._tmp:
