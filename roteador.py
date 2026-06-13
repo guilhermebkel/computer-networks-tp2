@@ -71,6 +71,7 @@ routing_table = {}
 peer_router_name_to_peer_socket = {}
 
 INFINITY = 16 # valor do custo infinito conforme o RIP
+FORWARD_MESSAGE_TYPE = ord('F') # mensagem de encaminhamento de mensagem de dados
 
 def recv_exactly(sock, expected_bytes):
     received = b''
@@ -98,6 +99,10 @@ def remove_peer_routes(name):
 
         if name in routing_table:
             routing_table[name] = (name, INFINITY)
+
+def pack_forward_router_message(dest, text):
+    text_in_bytes = text.encode('ascii', errors='replace')[:64].ljust(64, b'\x00')
+    return bytes([FORWARD_MESSAGE_TYPE]) + pack_router_name(dest) + text_in_bytes
 
 while(True):  # aguarda mensagens do comando de controle
     try:
@@ -196,6 +201,29 @@ while(True):  # aguarda mensagens do comando de controle
                 print("%s %s '%s'" % (comando, destino, texto) ,flush=True)
                 # a entrada com o destino na tabela de rotas identifica o próximo passo
                 # a mensagem enviada deve ser repassada para um vizinho, se necessário
+                destino = destino.rstrip('\x00')
+                texto   = texto.rstrip('\x00')
+
+                # a mensagem chegou ao destino final
+                if destino == my_name:
+                    print('R %s' % texto, flush=True)
+                else:
+                    with lock:
+                        route = routing_table.get(destino)
+
+                    # só encaminha se há rota conhecida e o destino está acessível
+                    if route and route[1] < INFINITY:
+                        next_hop, _ = route
+                        print('E %s %s %s' % (destino, next_hop, texto), flush=True)
+
+                        with lock:
+                            next_hop_peer_socket = peer_router_name_to_peer_socket.get(next_hop)
+
+                        if next_hop_peer_socket:
+                            try:
+                                next_hop_peer_socket.sendall(pack_forward_router_message(destino, texto))
+                            except Exception:
+                                pass
 
             elif comando=='T' or comando=='I':
                 print(comando,flush=True)
@@ -203,8 +231,12 @@ while(True):  # aguarda mensagens do comando de controle
                 # sua implementação deve decidir como tratar cada uma
 
             else:
-                print("Comando não reconhecido",flush=True)
                 # note que o programa a ser entregue não deve escrever nada além 
                 # do que foi definido no enunciado; entretanto, na avaliação nenhum
                 # roteador receberá comandos incorretos do programa de controle.
+                pass
+
+        # mensagens de roteadores vizinhos
+        else:
+            print("falta implementar")
         
