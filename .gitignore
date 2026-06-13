@@ -1,0 +1,7 @@
+*
+!*/
+!/controle/*
+!.gitignore
+!roteador.py
+!test_integration.py
+!Makefile
