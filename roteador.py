@@ -61,7 +61,7 @@ print(my_name,flush=True)
 # novas que surjam de outros roteadores, bem como enviar periodicamente
 # as mensagens do protocolo de roteamento para os seus vizinhos imediados
 ####################################################################
-
+import os
 import select
 import threading
 
@@ -71,7 +71,9 @@ routing_table = {}
 peer_router_name_to_peer_socket = {}
 
 INFINITY = 16 # valor do custo infinito conforme o RIP
+ROUTE_MESSAGE_TYPE = ord('R')  # mensagem de anúncio de vetor de distâncias
 FORWARD_MESSAGE_TYPE = ord('F') # mensagem de encaminhamento de mensagem de dados
+ANNOUNCE_INTERVAL = float(os.environ.get('RC_RIP_INTERVAL', '1.0')) # intervalo entre anúncios DV, alterável via variável de ambiente
 
 def recv_exactly(sock, expected_bytes):
     received = b''
@@ -103,6 +105,31 @@ def remove_peer_routes(name):
 def pack_forward_router_message(dest, text):
     text_in_bytes = text.encode('ascii', errors='replace')[:64].ljust(64, b'\x00')
     return bytes([FORWARD_MESSAGE_TYPE]) + pack_router_name(dest) + text_in_bytes
+
+def pack_route_update_message(exclude_next_hop=None):
+    with lock:
+        entries = []
+        for dest, (nh, dist) in routing_table.items():
+            entries.append((dest, INFINITY if nh == exclude_next_hop else dist))
+            # aqui usamos 'split horizon' para anunciar custo infinito para rotas cujo próximo salto é o próprio destinatário, evitando loops
+    parts = [bytes([ROUTE_MESSAGE_TYPE]), pack_router_name(my_name), pack('!H', len(entries))]
+    for dest, dist in entries:
+        parts.append(pack_router_name(dest) + pack('!H', dist))
+    return b''.join(parts)
+
+def announce_route_updates():
+    global timer
+    with lock:
+        peer_items = list(peer_router_name_to_peer_socket.items())
+    for peer_name, peer_socket in peer_items:
+        try:
+            peer_socket.sendall(pack_route_update_message(exclude_next_hop=peer_name))
+        except Exception:
+            pass
+    # reagenda pro próprio roteador para manter o anúncio periódico contínuo
+    timer = threading.Timer(ANNOUNCE_INTERVAL, announce_route_updates)
+    timer.daemon = True
+    timer.start()
 
 while(True):  # aguarda mensagens do comando de controle
     try:
@@ -149,6 +176,7 @@ while(True):  # aguarda mensagens do comando de controle
                 host, porto = extrai_endereco(msg)
                 # o próximo passo seria os dois roteadores se identificarem
                 # um para o outro para que os vizinhos se reconheçam
+
                 host = host.rstrip('\x00')
                 try:
                     new_connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -182,6 +210,7 @@ while(True):  # aguarda mensagens do comando de controle
                 print(comando, roteador, flush=True)
                 # OBS: o OUTRO roteador também deve remover a conexão de sua lista
                 # há mais de uma forma de fazer isso, vocês devem determinar a sua
+
                 with lock:
                     peer_socket = peer_router_name_to_peer_socket.pop(roteador, None)
 
@@ -201,6 +230,7 @@ while(True):  # aguarda mensagens do comando de controle
                 print("%s %s '%s'" % (comando, destino, texto) ,flush=True)
                 # a entrada com o destino na tabela de rotas identifica o próximo passo
                 # a mensagem enviada deve ser repassada para um vizinho, se necessário
+
                 destino = destino.rstrip('\x00')
                 texto   = texto.rstrip('\x00')
 
@@ -229,6 +259,19 @@ while(True):  # aguarda mensagens do comando de controle
                 print(comando,flush=True)
                 # cada comando vai exigir um tipo de reação do roteador que a recebe,
                 # sua implementação deve decidir como tratar cada uma
+
+                # caso o comando for 'T', imprime a tabela de roteamento atual
+                if comando=='T':
+                    with lock:
+                        rows = list(routing_table.items())
+                    for dest, (next_hop, dist) in rows:
+                        print('T %s %s %d' % (dest, next_hop, dist), flush=True)
+                # caso o comando for 'I', inicia o temporizador de anúncio periódico de rotas
+                else:
+                    if timer is None:
+                        timer = threading.Timer(ANNOUNCE_INTERVAL, announce_route_updates)
+                        timer.daemon = True
+                        timer.start()
 
             else:
                 # note que o programa a ser entregue não deve escrever nada além 
