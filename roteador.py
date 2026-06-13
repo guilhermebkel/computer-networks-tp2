@@ -1,3 +1,5 @@
+# Autores: Guilherme Mota Bromonschenkel Lima e Flavio Gabriel Soares Melo
+
 # Este é um programa simples que mostra como receber as mensagens enviadas
 # pelo programa de controle do TP2, até para confirmar que ele está
 # enviando as mensagens corretamente. 
