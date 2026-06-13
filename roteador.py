@@ -68,7 +68,9 @@ import threading
 lock = threading.Lock()
 sockets_list = []
 routing_table = {}
-peer_router_name_to_socket = {}
+peer_router_name_to_peer_socket = {}
+
+INFINITY = 16 # valor do custo infinito conforme o RIP
 
 def recv_exactly(sock, expected_bytes):
     received = b''
@@ -85,6 +87,17 @@ def pack_router_name(name):
 
 def unpack_router_name(data):
     return data.rstrip(b'\x00').decode('ascii', errors='replace')
+
+# seguindo a lógica do RIP, ao perder um vizinho, todas as rotas que passavam por ele recebem custo infinito para sinalizar que estão inacessíveis
+def remove_peer_routes(name):
+    with lock:
+        for destination in list(routing_table):
+            route_via, _ = routing_table[destination]
+            if route_via == name and destination != my_name:
+                routing_table[destination] = (name, INFINITY)
+
+        if name in routing_table:
+            routing_table[name] = (name, INFINITY)
 
 while(True):  # aguarda mensagens do comando de controle
     try:
@@ -108,11 +121,11 @@ while(True):  # aguarda mensagens do comando de controle
             connection.sendall(pack_router_name(my_name))
 
             with lock:
-                if peer_router_name in peer_router_name_to_socket:
+                if peer_router_name in peer_router_name_to_peer_socket:
                     # evitamos uma nova conexão com esse vizinho caso ela já existir
                     connection.close()
                 else:
-                    peer_router_name_to_socket[peer_router_name] = connection
+                    peer_router_name_to_peer_socket[peer_router_name] = connection
                     routing_table[peer_router_name] = (peer_router_name, 1)
                     sockets_list.append(connection)
 
@@ -143,11 +156,11 @@ while(True):  # aguarda mensagens do comando de controle
                     if peer_router_name_bytes:
                         peer_router_name = unpack_router_name(peer_router_name_bytes)
                         with lock:
-                            if peer_router_name in peer_router_name_to_socket:
+                            if peer_router_name in peer_router_name_to_peer_socket:
                                 # evitamos uma nova conexão com esse vizinho caso ela já existir
                                 new_connection.close()
                             else:
-                                peer_router_name_to_socket[peer_router_name] = new_connection
+                                peer_router_name_to_peer_socket[peer_router_name] = new_connection
                                 routing_table[peer_router_name] = (peer_router_name, 1)
                                 sockets_list.append(new_connection)
                     else:
@@ -164,6 +177,17 @@ while(True):  # aguarda mensagens do comando de controle
                 print(comando, roteador, flush=True)
                 # OBS: o OUTRO roteador também deve remover a conexão de sua lista
                 # há mais de uma forma de fazer isso, vocês devem determinar a sua
+                with lock:
+                    peer_socket = peer_router_name_to_peer_socket.pop(roteador, None)
+
+                if peer_socket:
+                    if peer_socket in sockets_list:
+                        sockets_list.remove(peer_socket)
+                    try:
+                        peer_socket.close()
+                    except Exception:
+                        pass
+                    remove_peer_routes(roteador)
 
             elif comando=='E':
                 # o roteador recebe o NOME do outro destino e o texto
