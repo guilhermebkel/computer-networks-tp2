@@ -116,8 +116,8 @@ def pack_route_update_message(exclude_next_hop=None):
     with lock:
         entries = []
         for dest, (nh, dist) in routing_table.items():
-            entries.append((dest, INFINITY if nh == exclude_next_hop else dist))
             # aqui usamos 'split horizon' para anunciar custo infinito para rotas cujo próximo salto é o próprio destinatário, evitando loops
+            entries.append((dest, INFINITY if nh == exclude_next_hop else dist))
     parts = [bytes([ROUTE_MESSAGE_TYPE]), pack_router_name(my_name), pack('!H', len(entries))]
     for dest, dist in entries:
         parts.append(pack_router_name(dest) + pack('!H', dist))
@@ -284,5 +284,5 @@ while(True):  # aguarda mensagens do comando de controle
 
         # mensagens de roteadores vizinhos
         else:
-            type_in_bytes = recv_exactly(socket, 1)
+            type_in_bytes = recv_exactly(socket_item, 1)
         
