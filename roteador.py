@@ -68,7 +68,7 @@ import threading
 lock = threading.Lock()
 sockets_list = []
 routing_table = {}
-neighbor_router_name_to_socket = {}
+peer_router_name_to_socket = {}
 
 def recv_exactly(sock, expected_bytes):
     received = b''
@@ -96,24 +96,24 @@ while(True):  # aguarda mensagens do comando de controle
         # novas conexões de roteadores vizinhos
         if socket is server_socket:
             connection, _ = server_socket.accept()
-            neighbor_router_name_in_bytes = recv_exactly(connection, 32)
+            peer_router_name_in_bytes = recv_exactly(connection, 32)
 
-            if not neighbor_router_name_in_bytes:
+            if not peer_router_name_in_bytes:
                 connection.close()
                 continue
 
-            neighbor_router_name = unpack_router_name(neighbor_router_name_in_bytes)
+            peer_router_name = unpack_router_name(peer_router_name_in_bytes)
 
             # enviamos o nome do nosso roteador de volta
             connection.sendall(pack_router_name(my_name))
 
             with lock:
-                if neighbor_router_name in neighbor_router_name_to_socket:
-                    # evitamos uma nova conexão com esse roteador caso ela já existir
+                if peer_router_name in peer_router_name_to_socket:
+                    # evitamos uma nova conexão com esse vizinho caso ela já existir
                     connection.close()
                 else:
-                    neighbor_router_name_to_socket[neighbor_router_name] = connection
-                    routing_table[neighbor_router_name] = (neighbor_router_name, 1)
+                    peer_router_name_to_socket[peer_router_name] = connection
+                    routing_table[peer_router_name] = (peer_router_name, 1)
                     sockets_list.append(connection)
 
         # mensagens do programa de controle
@@ -129,9 +129,32 @@ while(True):  # aguarda mensagens do comando de controle
                 # o roteador recebe o ENDEREÇO do outro roteador ao qual se conectar
                 msg=control.recv(34)
                 host, porto = extrai_endereco(msg)
-                print(comando, host, porto,flush=True)
                 # o próximo passo seria os dois roteadores se identificarem
                 # um para o outro para que os vizinhos se reconheçam
+                host = host.rstrip('\x00')
+                try:
+                    new_connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    new_connection.connect((host, porto))
+
+                    # enviamos nosso nome para o vizinho se identificar e aguardamos o nome dele para confirmar o handshake
+                    new_connection.sendall(pack_router_name(my_name))
+                    peer_router_name_bytes = recv_exactly(new_connection, 32)
+
+                    if peer_router_name_bytes:
+                        peer_router_name = unpack_router_name(peer_router_name_bytes)
+                        with lock:
+                            if peer_router_name in peer_router_name_to_socket:
+                                # evitamos uma nova conexão com esse vizinho caso ela já existir
+                                new_connection.close()
+                            else:
+                                peer_router_name_to_socket[peer_router_name] = new_connection
+                                routing_table[peer_router_name] = (peer_router_name, 1)
+                                sockets_list.append(new_connection)
+                    else:
+                        # o handshake falhou pois o vizinho não respondeu
+                        new_connection.close()
+                except Exception:
+                    pass
 
             elif comando=='D':
                 # o roteador recebe o NOME do outro roteador que deve ser removido
