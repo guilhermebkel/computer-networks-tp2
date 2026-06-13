@@ -62,47 +62,102 @@ print(my_name,flush=True)
 # as mensagens do protocolo de roteamento para os seus vizinhos imediados
 ####################################################################
 
+import select
+import threading
+
+lock = threading.Lock()
+sockets_list = []
+routing_table = {}
+neighbor_router_name_to_socket = {}
+
+def recv_exactly(sock, expected_bytes):
+    received = b''
+    while len(received) < expected_bytes:
+        remaining = expected_bytes - len(received)
+        chunk = sock.recv(remaining)
+        if not chunk:
+            return b''
+        received += chunk
+    return received
+
+def pack_router_name(name):
+    return name.encode('ascii', errors='replace')[:32].ljust(32, b'\x00')
+
+def unpack_router_name(data):
+    return data.rstrip(b'\x00').decode('ascii', errors='replace')
+
 while(True):  # aguarda mensagens do comando de controle
-    msg = control.recv(1)   # no roteador, não haverá apenas essa conexão
-    if not msg or msg=='':
-        print("Connection closed",flush=True)
-        sys.exit()
-    c = unpack("!c",msg)
-    comando = c[0].decode()
+    try:
+        readable, _, _ = select.select(sockets_list, [], [])
+    except (ValueError, OSError):
+        break
 
-    if comando=='C':
-        # o roteador recebe o ENDEREÇO do outro roteador ao qual se conectar
-        msg=control.recv(34)
-        host, porto = extrai_endereco(msg)
-        print(comando, host, porto,flush=True)
-        # o próximo passo seria os dois roteadores se identificarem
-        # um para o outro para que os vizinhos se reconheçam
+    for socket in list(readable):
+        # novas conexões de roteadores vizinhos
+        if socket is server_socket:
+            connection, _ = server_socket.accept()
+            neighbor_router_name_in_bytes = recv_exactly(connection, 32)
 
-    elif comando=='D':
-        # o roteador recebe o NOME do outro roteador que deve ser removido
-        # da sua lista de conexões
-        msg=control.recv(32)
-        roteador = extrai_roteador(msg)
-        print(comando, roteador, flush=True)
-        # OBS: o OUTRO roteador também deve remover a conexão de sua lista
-        # há mais de uma forma de fazer isso, vocês devem determinar a sua
+            if not neighbor_router_name_in_bytes:
+                connection.close()
+                continue
 
-    elif comando=='E':
-        # o roteador recebe o NOME do outro destino e o texto
-        msg=control.recv(96)
-        destino, texto = extrai_destino_texto(msg)
-        print("%s %s '%s'" % (comando, destino, texto) ,flush=True)
-        # a entrada com o destino na tabela de rotas identifica o próximo passo
-        # a mensagem enviada deve ser repassada para um vizinho, se necessário
+            neighbor_router_name = unpack_router_name(neighbor_router_name_in_bytes)
 
-    elif comando=='T' or comando=='I':
-        print(comando,flush=True)
-        # cada comando vai exigir um tipo de reação do roteador que a recebe,
-        # sua implementação deve decidir como tratar cada uma
+            # enviamos o nome do nosso roteador de volta
+            connection.sendall(pack_router_name(my_name))
 
-    else:
-        print("Comando não reconhecido",flush=True)
-        # note que o programa a ser entregue não deve escrever nada além 
-        # do que foi definido no enunciado; entretanto, na avaliação nenhum
-        # roteador receberá comandos incorretos do programa de controle.
+            with lock:
+                if neighbor_router_name in neighbor_router_name_to_socket:
+                    # evitamos uma nova conexão com esse roteador caso ela já existir
+                    connection.close()
+                else:
+                    neighbor_router_name_to_socket[neighbor_router_name] = connection
+                    routing_table[neighbor_router_name] = (neighbor_router_name, 1)
+                    sockets_list.append(connection)
+
+        # mensagens do programa de controle
+        elif socket is control:
+            msg = control.recv(1)   # no roteador, não haverá apenas essa conexão
+            if not msg or msg=='':
+                print("Connection closed",flush=True)
+                sys.exit()
+            c = unpack("!c",msg)
+            comando = c[0].decode()
+
+            if comando=='C':
+                # o roteador recebe o ENDEREÇO do outro roteador ao qual se conectar
+                msg=control.recv(34)
+                host, porto = extrai_endereco(msg)
+                print(comando, host, porto,flush=True)
+                # o próximo passo seria os dois roteadores se identificarem
+                # um para o outro para que os vizinhos se reconheçam
+
+            elif comando=='D':
+                # o roteador recebe o NOME do outro roteador que deve ser removido
+                # da sua lista de conexões
+                msg=control.recv(32)
+                roteador = extrai_roteador(msg)
+                print(comando, roteador, flush=True)
+                # OBS: o OUTRO roteador também deve remover a conexão de sua lista
+                # há mais de uma forma de fazer isso, vocês devem determinar a sua
+
+            elif comando=='E':
+                # o roteador recebe o NOME do outro destino e o texto
+                msg=control.recv(96)
+                destino, texto = extrai_destino_texto(msg)
+                print("%s %s '%s'" % (comando, destino, texto) ,flush=True)
+                # a entrada com o destino na tabela de rotas identifica o próximo passo
+                # a mensagem enviada deve ser repassada para um vizinho, se necessário
+
+            elif comando=='T' or comando=='I':
+                print(comando,flush=True)
+                # cada comando vai exigir um tipo de reação do roteador que a recebe,
+                # sua implementação deve decidir como tratar cada uma
+
+            else:
+                print("Comando não reconhecido",flush=True)
+                # note que o programa a ser entregue não deve escrever nada além 
+                # do que foi definido no enunciado; entretanto, na avaliação nenhum
+                # roteador receberá comandos incorretos do programa de controle.
         
