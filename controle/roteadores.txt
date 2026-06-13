@@ -1,0 +1,4 @@
+vulcan 150.164.4.47 11111
+kronos amazonas.grad.dcc.ufmg.br 6666
+risa 127.0.0.1 54321
+terra localhost 55555

@@ -1,0 +1,30 @@
+Conteúdo desta pasta:
+
+    controle.py - programa de controle dos roteadores que será usado
+         durante a avaliação
+    esqueleto_roteador.py - programa básico que interage com o programa
+         de controle da forma como um roteador deveria
+    roteadores_locais.txt - arquivo de configuração com um conjunto de
+         roteadores executando no mesmo host (localhost) para permitir
+         testes com uma única máquina 
+    roteadores.txt - arquivo de configuração com roteadores disparados
+         em mais de uma máquina
+    exemplo - sub-diretório com exemplo de execução 
+
+Vocês não devem alterar o programa controle.py, pois ele será o programa
+usado durante a avaliação (não é preciso incluir o arquivo na entrega).
+
+Vocês devem entregar apenas o arquivo roteador.py, que deve conter toda 
+a lógica do programa e do protocolo de roteamento.
+CERTIFIQUE-SE DE INCLUIR UM COMENTÁRIO COM SEU(S) NOME(S) NO INÍCIO DO ARQUIVO.
+
+O arquivo esqueleto_roteador.py pode ser usado como base para o desenvolvimento
+do programa roteador.py. Comentários no arquivo já indicam pontos que podem ser
+reaproveitados e aqueles que precisarão ser alterados.
+
+Da forma como o programa de controle e a interação com os roteadores foram
+projetados, o arquivo de descrição de roteadores pode conter apenas roteadores
+definidos como executando no host local (localhost) ou todos os roteadores
+definidos com como executando em máquinas identificadas com seus nomes na rede.
+Um arquivo de roteadores que descreva alguns roteadores com base em localhost
+e outros com o nome de máquinas remotas não vai funcionar corretamente.

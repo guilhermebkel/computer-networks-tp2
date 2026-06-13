@@ -1,0 +1,12 @@
+conectando vulcan -> ('localhost', 11111) ... conectado; sent "vulcan"
+conectando kronos -> ('localhost', 22222) ... conectado; sent "kronos"
+conectando risa -> ('127.0.0.1', 33333) ... conectado; sent "risa"
+conectando terra -> ('localhost', 44444) ... conectado; sent "terra"
+Enviar I para todos os roteadores
+ZZ...00
+Enviar I para todos os roteadores
+Exibir a tabela no roteador vulcan
+Adicionar link entre kronos e risa( 127.0.0.1 , 33333 )
+Remover link entre terra e vulcan
+Enviar 'Oi!' para vulcan a partir de kronos
+Enviar 'Alo.' para risa a partir de terra

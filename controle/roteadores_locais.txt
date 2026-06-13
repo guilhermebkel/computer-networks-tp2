@@ -1,0 +1,4 @@
+vulcan localhost 11111
+kronos localhost   22222
+risa 127.0.0.1   33333
+terra localhost  44444
