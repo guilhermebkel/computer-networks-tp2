@@ -77,6 +77,7 @@ ROUTE_MESSAGE_TYPE = ord('R')  # mensagem de anúncio de vetor de distâncias
 FORWARD_MESSAGE_TYPE = ord('F') # mensagem de encaminhamento de mensagem de dados
 ANNOUNCE_INTERVAL = float(os.environ.get('RC_RIP_INTERVAL', '1.0')) # intervalo entre anúncios DV, alterável via variável de ambiente
 
+
 # o roteador sempre se conhece com distancia zero
 routing_table[my_name] = (my_name, 0)
 sockets_list = [server_socket, control]
@@ -118,13 +119,14 @@ def pack_route_update_message(exclude_next_hop=None):
         for dest, (nh, dist) in routing_table.items():
             # aqui usamos 'split horizon' para anunciar custo infinito para rotas cujo próximo salto é o próprio destinatário, evitando loops
             entries.append((dest, INFINITY if nh == exclude_next_hop else dist))
+
     parts = [bytes([ROUTE_MESSAGE_TYPE]), pack_router_name(my_name), pack('!H', len(entries))]
     for dest, dist in entries:
         parts.append(pack_router_name(dest) + pack('!H', dist))
     return b''.join(parts)
 
-def announce_route_updates():
-    global timer
+
+def announce_route_updates_now():
     with lock:
         peer_items = list(peer_router_name_to_peer_socket.items())
     for peer_name, peer_socket in peer_items:
@@ -132,6 +134,11 @@ def announce_route_updates():
             peer_socket.sendall(pack_route_update_message(exclude_next_hop=peer_name))
         except Exception:
             pass
+
+
+def announce_route_updates():
+    global timer
+    announce_route_updates_now()
     # reagenda pro próprio roteador para manter o anúncio periódico contínuo
     timer = threading.Timer(ANNOUNCE_INTERVAL, announce_route_updates)
     timer.daemon = True
@@ -227,6 +234,7 @@ while(True):  # aguarda mensagens do comando de controle
                     except Exception:
                         pass
                     remove_peer_routes(roteador)
+                    announce_route_updates_now()
 
             elif comando=='E':
                 # o roteador recebe o NOME do outro destino e o texto
@@ -285,4 +293,102 @@ while(True):  # aguarda mensagens do comando de controle
         # mensagens de roteadores vizinhos
         else:
             type_in_bytes = recv_exactly(socket_item, 1)
-        
+            # conexão fechada pelo par
+            if not type_in_bytes:
+                # remove o par das estruturas internas
+                roteador = None
+                with lock:
+                    for name, s in list(peer_router_name_to_peer_socket.items()):
+                        if s is socket_item:
+                            roteador = name
+                            break
+                    if roteador:
+                        peer_socket = peer_router_name_to_peer_socket.pop(roteador, None)
+                        if peer_socket and peer_socket in sockets_list:
+                            try:
+                                sockets_list.remove(peer_socket)
+                            except ValueError:
+                                pass
+                            try:
+                                peer_socket.close()
+                            except Exception:
+                                pass
+                        remove_peer_routes(roteador)
+                continue
+
+            type_byte = type_in_bytes[0]
+
+            # mensagem de anúncio de vetor de distâncias (R)
+            if type_byte == ROUTE_MESSAGE_TYPE:
+                header = recv_exactly(socket_item, 34)  # 32 bytes nome do remetente + 2 bytes número de entradas
+                if not header:
+                    continue
+                sender = unpack_router_name(header[:32])
+                num_entries = unpack('!H', header[32:34])[0]
+
+                entries_data = recv_exactly(socket_item, num_entries * 34)
+                if num_entries and not entries_data:
+                    continue
+
+                # atualiza tabela de rotas segundo lógica simples do RIP
+                updated = False
+                with lock:
+                    for i in range(num_entries):
+                        off = i * 34
+                        dest = unpack_router_name(entries_data[off:off+32])
+                        dist = unpack('!H', entries_data[off+32:off+34])[0]
+                        # aumenta custo por um salto e limita em INFINITY
+                        proposed = min(INFINITY, dist + 1)
+
+                        # ignora rota para si mesmo
+                        if dest == my_name:
+                            continue
+
+                        current = routing_table.get(dest)
+                        if (not current) or (proposed < current[1]) or (current[0] == sender and proposed != current[1]):
+                            routing_table[dest] = (sender, proposed)
+                            updated = True
+
+                # se a tabela mudou, anuncia nossa própria tabela atualizada aos vizinhos
+                if updated:
+                    with lock:
+                        peer_items = list(peer_router_name_to_peer_socket.items())
+                    for peer_name, peer_socket in peer_items:
+                        if peer_name == sender:
+                            continue
+                        try:
+                            peer_socket.sendall(pack_route_update_message(exclude_next_hop=peer_name))
+                        except Exception:
+                            pass
+
+            # mensagem de encaminhamento de dados (F)
+            elif type_byte == FORWARD_MESSAGE_TYPE:
+                msg = recv_exactly(socket_item, 96)  # 32 bytes destino + 64 bytes texto
+                if not msg:
+                    continue
+                destino, texto = extrai_destino_texto(msg)
+                destino = destino.rstrip('\x00')
+                texto = texto.rstrip('\x00')
+
+                # chegou ao destino final
+                if destino == my_name:
+                    print('R %s' % texto, flush=True)
+                else:
+                    with lock:
+                        route = routing_table.get(destino)
+
+                    if route and route[1] < INFINITY:
+                        next_hop, _ = route
+                        print('E %s %s %s' % (destino, next_hop, texto), flush=True)
+
+                        with lock:
+                            next_hop_peer_socket = peer_router_name_to_peer_socket.get(next_hop)
+
+                        if next_hop_peer_socket:
+                            try:
+                                next_hop_peer_socket.sendall(pack_forward_router_message(destino, texto))
+                            except Exception:
+                                pass
+            else:
+                # tipo desconhecido: ignora
+                continue
