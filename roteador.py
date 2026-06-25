@@ -202,7 +202,7 @@ while(True):  # aguarda mensagens do comando de controle
 
             if comando=='C':
                 # o roteador recebe o ENDEREÇO do outro roteador ao qual se conectar
-                msg=control.recv(34)
+                msg=recv_exactly(control, 34)
                 host, porto = extrai_endereco(msg)
                 # o próximo passo seria os dois roteadores se identificarem
                 # um para o outro para que os vizinhos se reconheçam
@@ -235,7 +235,7 @@ while(True):  # aguarda mensagens do comando de controle
             elif comando=='D':
                 # o roteador recebe o NOME do outro roteador que deve ser removido
                 # da sua lista de conexões
-                msg=control.recv(32)
+                msg=recv_exactly(control, 32)
                 roteador = extrai_roteador(msg).rstrip('\x00')
                 # OBS: o OUTRO roteador também deve remover a conexão de sua lista
                 # há mais de uma forma de fazer isso, vocês devem determinar a sua
@@ -255,7 +255,7 @@ while(True):  # aguarda mensagens do comando de controle
 
             elif comando=='E':
                 # o roteador recebe o NOME do outro destino e o texto
-                msg=control.recv(96)
+                msg=recv_exactly(control, 96)
                 destino, texto = extrai_destino_texto(msg)
                 # a entrada com o destino na tabela de rotas identifica o próximo passo
                 # a mensagem enviada deve ser repassada para um vizinho, se necessário

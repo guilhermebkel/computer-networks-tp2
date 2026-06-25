@@ -591,6 +591,164 @@ class TestComControlePy(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# TestComMaquinasDCC — roteador local conectado a máquinas reais do DCC
+#
+# Pré-requisito: iniciar os roteadores remotos ANTES de rodar os testes.
+#
+# Uso:
+#   RC_RIP_DCC_ROUTERS="vulcan:150.164.4.47:11111" make test
+#   RC_RIP_DCC_ROUTERS="vulcan:150.164.4.47:11111,risa:cristal.dcc.ufmg.br:4321" make test-dcc
+#
+# Formato da variável: "nome:host:porta" separados por vírgula.
+# Os roteadores DCC devem estar rodando antes de executar esses testes.
+# ---------------------------------------------------------------------------
+
+def _parse_dcc_routers():
+    raw = os.environ.get('RC_RIP_DCC_ROUTERS', '')
+    result = {}
+    for entry in raw.split(','):
+        entry = entry.strip()
+        if not entry:
+            continue
+        # separa pelo último ':' (porta) e pelo penúltimo (host), para
+        # não quebrar em hostnames simples como cristal.dcc.ufmg.br:4321
+        parts = entry.split(':')
+        if len(parts) < 3:
+            continue
+        name = parts[0].strip()
+        host = ':'.join(parts[1:-1]).strip()  # suporta IPv6 no meio
+        try:
+            port = int(parts[-1].strip())
+            result[name] = (host, port)
+        except ValueError:
+            pass
+    return result
+
+_DCC_ROUTERS = _parse_dcc_routers()
+
+
+@unittest.skipUnless(_DCC_ROUTERS, 'RC_RIP_DCC_ROUTERS não configurado — esses testes só rodam contra máquinas do DCC')
+class TestComMaquinasDCC(BaseRouterTest):
+    """
+    Sobe um roteador local e o conecta ao(s) roteador(es) já rodando no DCC,
+    verificando convergência e encaminhamento entre máquinas reais.
+
+    Exemplos de uso:
+      RC_RIP_DCC_ROUTERS="grande:grande.grad.dcc.ufmg.br:11111" make test
+      RC_RIP_DCC_ROUTERS="grande:grande.grad.dcc.ufmg.br:11111,outra:outra.dcc.ufmg.br:22222" make test-dcc
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dcc_routers    = _DCC_ROUTERS
+        self._dcc_ctrl_socks = []
+
+        # O roteador.py bloqueia em server_socket.accept() esperando o controle.py
+        # conectar antes de entrar no while loop. O teste assume esse papel: conecta
+        # a cada roteador DCC e envia seu nome, desbloqueando-o para aceitar vizinhos.
+        for dcc_name, (dcc_host, dcc_port) in self.dcc_routers.items():
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(5.0)
+                s.connect((dcc_host, dcc_port))
+                s.sendall(pack('!32s', dcc_name.encode()))
+                s.settimeout(None)
+                self._dcc_ctrl_socks.append(s)
+            except Exception as e:
+                self.skipTest(
+                    'Não foi possível conectar ao roteador DCC %s (%s:%d): %s'
+                    % (dcc_name, dcc_host, dcc_port, e)
+                )
+
+        local_port = find_free_port()
+        addr_book  = {'local': ('127.0.0.1', local_port)}
+        addr_book.update({n: (h, p) for n, (h, p) in self.dcc_routers.items()})
+
+        self.routers['local'] = RouterProcess(local_port)
+        self.ctrls['local']   = ControlConn(local_port, 'local', addr_book)
+
+    def tearDown(self):
+        super().tearDown()
+        for s in self._dcc_ctrl_socks:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    def _first_dcc(self):
+        return next(iter(self.dcc_routers))
+
+    def test_tabela_apos_conectar_a_dcc(self):
+        """Tabela local deve mostrar o roteador DCC a distância 1 após convergência."""
+        dcc = self._first_dcc()
+        self.ctrls['local'].start()
+        self.ctrls['local'].connect(dcc)
+        self.wait_converge()
+
+        table = self.parse_table(self.get_table('local'))
+        self.assertIn(dcc, table,
+                      msg='Roteador DCC "%s" não aparece na tabela local' % dcc)
+        dist, _ = table[dcc]
+        self.assertEqual(dist, 1,
+                         msg='Distância para "%s" deveria ser 1, mas é %d' % (dcc, dist))
+
+    def test_envio_para_roteador_dcc(self):
+        """Local envia E → deve imprimir 'E <dcc> <dcc> texto' antes de encaminhar."""
+        dcc = self._first_dcc()
+        self.ctrls['local'].start()
+        self.ctrls['local'].connect(dcc)
+        self.wait_converge()
+
+        self.routers['local'].drain_lines()
+        self.ctrls['local'].send(dcc, 'teste_dcc')
+        time.sleep(1.0)
+
+        lines    = self.routers['local'].drain_lines()
+        expected = 'E %s %s teste_dcc' % (dcc, dcc)
+        self.assertTrue(any(expected in l for l in lines),
+                        msg='Esperava "%s" nas linhas: %s' % (expected, lines))
+
+    def test_rota_inacessivel_apos_desconectar_dcc(self):
+        """Após D, o roteador DCC deve aparecer inacessível (dist=16) na tabela local."""
+        dcc = self._first_dcc()
+        self.ctrls['local'].start()
+        self.ctrls['local'].connect(dcc)
+        self.wait_converge()
+
+        self.ctrls['local'].disconnect(dcc)
+        self.wait_converge()
+
+        table = self.parse_table(self.get_table('local'))
+        self.assertUnreachable(dcc, table)
+
+    def test_rotas_transitivas_via_dcc(self):
+        """
+        Com 2+ roteadores DCC conectados entre si, o local deve aprender rotas
+        transitivas através do primeiro. Requer os DCC já linkados entre si.
+        """
+        if len(self.dcc_routers) < 2:
+            self.skipTest('Requer 2+ roteadores DCC em RC_RIP_DCC_ROUTERS')
+
+        names     = list(self.dcc_routers.keys())
+        dcc_first  = names[0]
+        dcc_second = names[1]
+
+        self.ctrls['local'].start()
+        self.ctrls['local'].connect(dcc_first)
+        self.wait_converge()
+
+        table = self.parse_table(self.get_table('local'))
+        self.assertIn(dcc_second, table,
+                      msg='Rota transitiva para "%s" não apareceu na tabela local' % dcc_second)
+        dist, nh = table[dcc_second]
+        self.assertLess(dist, INFINITY,
+                        msg='"%s" inacessível (dist=%d)' % (dcc_second, dist))
+        self.assertEqual(nh, dcc_first,
+                         msg='Next hop para "%s" deveria ser "%s", mas é "%s"' % (
+                             dcc_second, dcc_first, nh))
+
+
+# ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
