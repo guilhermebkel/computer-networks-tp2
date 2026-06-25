@@ -33,6 +33,12 @@ make test
 
 ### Produção
 
+Máquina A (produção - dcc):
+```sh
+make run port=5555
+```
+
+Máquina B (produção - dcc):
 ```sh
 RC_RIP_DCC_ROUTERS="grande:grande.grad.dcc.ufmg.br:5555" make test
 ```
