@@ -40,5 +40,10 @@ make run port=5555
 
 Máquina B (produção - dcc):
 ```sh
-RC_RIP_DCC_ROUTERS="grande:grande.grad.dcc.ufmg.br:5555" make test
+make run port=4444
+```
+
+Máquina C (produção - dcc):
+```sh
+RC_RIP_DCC_ROUTERS="grande:grande.grad.dcc.ufmg.br:5555,grande:grande.grad.dcc.ufmg.br:4444" make test
 ```
