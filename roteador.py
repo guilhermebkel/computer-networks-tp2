@@ -144,6 +144,23 @@ def announce_route_updates():
     timer.daemon = True
     timer.start()
 
+def update_distance_vector(sender, routes):
+    route_set = {destino for destino, _ in routes}
+    with lock:
+        for d in list(routing_table):
+            if routing_table[d][0] == sender and d not in route_set and d != my_name:
+                routing_table[d] = (sender, INFINITY)
+        for destino, dist in routes:
+            if destino == my_name:
+                continue
+            new_distance = min(dist + 1, INFINITY)
+            if destino not in routing_table:
+                routing_table[destino] = (sender, new_distance)
+            elif routing_table[destino][0] == sender:
+                routing_table[destino] = (sender, new_distance)
+            elif routing_table[destino][1] > new_distance:
+                routing_table[destino] = (sender, new_distance)
+
 while(True):  # aguarda mensagens do comando de controle
     try:
         readable, _, _ = select.select(sockets_list, [], [])
@@ -302,18 +319,23 @@ while(True):  # aguarda mensagens do comando de controle
                         if s is socket_item:
                             roteador = name
                             break
-                    if roteador:
-                        peer_socket = peer_router_name_to_peer_socket.pop(roteador, None)
-                        if peer_socket and peer_socket in sockets_list:
-                            try:
-                                sockets_list.remove(peer_socket)
-                            except ValueError:
-                                pass
-                            try:
-                                peer_socket.close()
-                            except Exception:
-                                pass
-                        remove_peer_routes(roteador)
+                if roteador:
+                    with lock:
+                        peer_router_name_to_peer_socket.pop(roteador, None)
+                    if socket_item in sockets_list:
+                        sockets_list.remove(socket_item)
+                    try:
+                        socket_item.close()
+                    except Exception:
+                        pass
+                    remove_peer_routes(roteador)
+                else:
+                    if socket_item in sockets_list:
+                        sockets_list.remove(socket_item)
+                    try:
+                        socket_item.close()
+                    except Exception:
+                        pass
                 continue
 
             type_byte = type_in_bytes[0]
@@ -326,40 +348,15 @@ while(True):  # aguarda mensagens do comando de controle
                 sender = unpack_router_name(header[:32])
                 num_entries = unpack('!H', header[32:34])[0]
 
-                entries_data = recv_exactly(socket_item, num_entries * 34)
-                if num_entries and not entries_data:
-                    continue
-
-                # atualiza tabela de rotas segundo lógica simples do RIP
-                updated = False
-                with lock:
-                    for i in range(num_entries):
-                        off = i * 34
-                        dest = unpack_router_name(entries_data[off:off+32])
-                        dist = unpack('!H', entries_data[off+32:off+34])[0]
-                        # aumenta custo por um salto e limita em INFINITY
-                        proposed = min(INFINITY, dist + 1)
-
-                        # ignora rota para si mesmo
-                        if dest == my_name:
-                            continue
-
-                        current = routing_table.get(dest)
-                        if (not current) or (proposed < current[1]) or (current[0] == sender and proposed != current[1]):
-                            routing_table[dest] = (sender, proposed)
-                            updated = True
-
-                # se a tabela mudou, anuncia nossa própria tabela atualizada aos vizinhos
-                if updated:
-                    with lock:
-                        peer_items = list(peer_router_name_to_peer_socket.items())
-                    for peer_name, peer_socket in peer_items:
-                        if peer_name == sender:
-                            continue
-                        try:
-                            peer_socket.sendall(pack_route_update_message(exclude_next_hop=peer_name))
-                        except Exception:
-                            pass
+                routes = []
+                for _ in range(num_entries):
+                    entry = recv_exactly(socket_item, 34)
+                    if not entry:
+                        break
+                    destino = unpack_router_name(entry[:32])
+                    dist = unpack('!H', entry[32:])[0]
+                    routes.append((destino, dist))
+                update_distance_vector(sender, routes)
 
             # mensagem de encaminhamento de dados (F)
             elif type_byte == FORWARD_MESSAGE_TYPE:
